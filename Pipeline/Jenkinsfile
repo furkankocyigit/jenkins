@@ -1,0 +1,203 @@
+pipeline{
+    
+	agent { label 'MS_IST_W10_Build_8' 
+    }
+
+	environment{
+		COVERITY_PROJECT='sp70_evkit_gui'
+		DEFAULT_CONTENT='Check console output at ${BUILD_URL} to view the results.'
+    }
+
+	options {
+        skipDefaultCheckout(true)
+		disableConcurrentBuilds() 
+    }
+
+    stages{
+		
+		stage('Checkout SCM'){
+            steps{
+                // Clean before build
+                cleanWs()
+                // We need to explicitly checkout from SCM here
+                checkout scm
+
+				bat '''
+					cd Pipeline
+					cd HeadSHA
+					checkPRstate.bat
+				'''
+            }
+		}
+
+        stage('Get version'){
+            steps{
+				bat'''	cd Pipeline
+						cd version
+						revision.bat'''
+				bat	'''	cd Pipeline
+						cd version 
+						powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File getVersion.ps1'''
+				
+				script {
+						readProperties(file: 'Pipeline/version/env.properties').each {key, value -> env[key] = value }
+						}
+				
+				bat ''' cd Pipeline
+						cd version 
+						powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File buildInfo.ps1'''			
+            }
+        }
+
+		stage('Build'){
+            steps{
+				publishChecks(name:'JenkinsStatusVoter',status:'IN_PROGRESS', summary:'Building...')
+                bat "dotnet build --configuration Release"
+				script{
+                    currentBuild.displayName = "v${VERSION} [${BUILD_SCM_REVISION}] ${BUILD_TYPE}"
+				}
+            }
+			
+        }
+		stage('Test'){
+            steps{
+                bat "GenerateUnitTestMetrics.bat"
+				
+				step ([$class: 'MSTestPublisher', testResultsFile:"TestResults/*.trx", failOnError: true, keepLongStdio: true])
+            }
+        }
+
+		stage('Coverity Scan'){
+            steps{
+				bat'''	cd Pipeline
+						cd Scan
+						powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File coverityScan.ps1
+						cd ..
+						cd ..
+						'''
+				script {
+						readProperties(file: 'Pipeline/Scan/coverity_env_file.txt').each {key, value -> env[key] = value }
+						}
+				script{
+					if(env.COV_NEW_ISSUES_FOUND){
+						currentBuild.result = "UNSTABLE"
+						unstable(message: "${STAGE_NAME} is unstable")
+					}
+				}
+            }
+        }
+
+		stage('Inno Setup'){
+            steps{
+				bat'''	cd Pipeline
+						cd InnoSetup
+						powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File innoSetup.ps1
+						cd ..
+						cd ..
+						'''
+            }
+        }
+
+		stage('Coverity Reports'){
+            steps{
+				bat'''	cd Pipeline
+						cd CoverityReports
+						powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File generateCoverityReports.ps1
+						cd ..
+						cd ..
+						'''
+            }
+        }
+
+	
+        // stage('Env Variables'){
+        //     steps{
+        //         bat 'set'                                                     
+        //     }
+        // }
+    
+		stage('Code Coverage Report') {
+			steps {
+				publishHTML(target: [
+					allowMissing: false, 
+					alwaysLinkToLastBuild: false, 
+					keepAll: false, 
+					reportDir: 'UnitTest_Reports', 
+					reportFiles: 'index.html', 
+					reportName: 'Code Coverage Results', 
+					reportTitles: 'Code Coverage Report'])
+				
+				publishCoverage adapters: [opencoverAdapter(mergeToOneReport: true, path: '**/*/coverage.opencover.xml')], sourceFileResolver: sourceFiles('STORE_ALL_BUILD')
+				}
+		}
+    }
+
+	post {
+
+		success {
+			bat '''
+				cd Pipeline
+				cd PrepareRelease
+				powershell.exe -ExecutionPolicy Bypass -file prepareRelease.ps1
+				cd ..
+				cd ..	
+				'''
+			archiveArtifacts artifacts: 'release/*, coverity_reports/*,UnitTest_Reports/*,TestResults/*.trx,GeneratedReports/*.xml', followSymlinks: false
+			
+			step ([$class: 'RichTextPublisher', 
+					stableText:       readFile("Pipeline/RichTextMessage/RichTextMessage.html"), 
+					unstableAsStable: true,
+					failedAsStable:   true,
+					parserName:       'HTML',
+					abortedAsStable:  true ])
+				
+			emailext to: "furkan.kocyigit@analog.com",
+			mimeType: 'text/html',
+			subject: 'SUCCESS $JOB_BASE_NAME Build #$BUILD_NUMBER',
+			body: readFile("Pipeline/Notification/SuccessfulMail.html")
+			
+			setBuildStatus("Build complete", "SUCCESS");
+				
+			
+		}
+		failure{
+			emailext to: "furkan.kocyigit@analog.com",
+			mimeType: 'text/html',
+			subject: 'FAILED $JOB_BASE_NAME Build #$BUILD_NUMBER',
+			body: readFile("Pipeline/Notification/FailureMail.html")
+			
+			setBuildStatus("Build failed", "FAILURE");
+
+		} 
+		unstable{
+			emailext to: "furkan.kocyigit@analog.com",
+			mimeType: 'text/html',
+			subject: 'UNSTABLE $JOB_BASE_NAME Build #$BUILD_NUMBER',
+			body: readFile("Pipeline/Notification/UnstableMail.html")
+			
+			setBuildStatus("Build is unstable", "UNSTABLE");
+		}
+		fixed{
+			emailext to: "furkan.kocyigit@analog.com",
+			mimeType: 'text/html',
+			subject: 'FIXED $JOB_BASE_NAME Build #$BUILD_NUMBER',
+			body: readFile("Pipeline/Notification/FixedMail.html")
+			
+			setBuildStatus("Build is fixed", "SUCCESS");
+		}           
+    }
+	
+}
+
+
+
+//This code will set commit status for custom repo with configured context and message
+void setBuildStatus(String message, String state) {
+  step([
+      $class: "GitHubCommitStatusSetter",
+      reposSource: [$class: "ManuallyEnteredRepositorySource", url: "$GITHUB_REPO_GIT_URL"],
+      contextSource: [$class: "ManuallyEnteredCommitContextSource", context: "CiJenkinsMaxim"],
+      errorHandlers: [[$class: "ChangingBuildStatusErrorHandler", result: "UNSTABLE"]],
+      statusResultSource: [ $class: "ConditionalStatusResultSource", results: [[$class: "AnyBuildResult", message: message, state: state]] ]
+  ]);
+}

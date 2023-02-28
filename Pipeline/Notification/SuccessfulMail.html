@@ -1,0 +1,19 @@
+<p class=MsoNormal><b style='mso-bidi-font-weight:normal'><span style='font-size:24.0pt;mso-bidi-font-size:11.0pt;color:green'>Jenkins build #$BUILD_NUMBER for project $JOB_BASE_NAME is successful.<o:p></o:p></span></b></p>
+
+$DEFAULT_CONTENT<br><br>
+BUILD_NUMBER: ${BUILD_NUMBER}<br>
+BUILD_MACHINE: ${NODE_NAME}<br>
+BUILD_SCM_REVISION: ${BUILD_SCM_REVISION}<br>
+BUILD_TIMESTAMP: ${BUILD_TIMESTAMP}<br>
+BUILD_TYPE: ${BUILD_TYPE}<br>
+VERSION: ${VERSION}<br>
+COV_NUMBER_OF_NEW_ISSUES_0: ${COV_NUMBER_OF_NEW_ISSUES_0}<br>
+COV_NEW_ISSUES_URL_0: ${COV_NEW_ISSUES_URL_0}<br>
+COV_ALL_ISSUES_URL_0: ${COV_ALL_ISSUES_URL_0}<br>
+<p>${CAUSE}</p>
+<p>Github PR State:</p>
+<p>${GITHUB_PR_STATE}</p>
+<p>Github Pull Request Title:<br>
+${GITHUB_PR_TITLE}</p>
+<p>Changes since last build:<br>
+${CHANGES}</p>
